@@ -1,47 +1,43 @@
 import React, { useState, useEffect, useRef } from "react";
-import YouTube from "react-youtube";
-import Vimeo from "@vimeo/player";
 
-// Helper function to format time
 const formatTime = (timeInSeconds) => {
-  const minutes = Math.floor(timeInSeconds / 60);
-  const seconds = Math.floor(timeInSeconds % 60).toString().padStart(2, "0");
-  return `${minutes}:${seconds}`;
+  const hours = Math.floor(timeInSeconds / 3600);
+  const minutes = Math.floor((timeInSeconds % 3600) / 60);
+  const seconds = Math.floor(timeInSeconds % 60);
+
+  return `${hours > 0 ? hours + "h " : ""}${minutes > 0 ? minutes + "m " : ""}${seconds}s`;
 };
 
-const VideoWatchTracker = () => {
+const VideoPlayer = () => {
   const [videoUrl, setVideoUrl] = useState("");
   const [videoType, setVideoType] = useState("");
   const [watchTime, setWatchTime] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
-  const vimeoPlayerRef = useRef(null);
-  const fileVideoRef = useRef(null);
-
-  useEffect(() => {
-    if (videoType === "vimeo" && videoUrl) {
-      const vimeoId = extractVimeoId(videoUrl);
-      const vimeoPlayer = new Vimeo(vimeoPlayerRef.current, {
-        id: vimeoId,
-        width: 640,
-      });
-
-      vimeoPlayer.on("timeupdate", (data) => setWatchTime(data.seconds));
-      vimeoPlayer.on("loaded", (data) => setTotalDuration(data.duration));
-    }
-  }, [videoType, videoUrl]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const videoRef = useRef(null);
+  const youtubePlayer = useRef(null);
+  const vimeoPlayer = useRef(null);
 
   const handleUrlChange = (e) => {
     const url = e.target.value.trim();
     setVideoUrl(url);
+    setLoading(true);
+    setError(null);
 
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
       setVideoType("youtube");
+      setLoading(false);
     } else if (url.includes("vimeo.com")) {
       setVideoType("vimeo");
+      setLoading(false);
     } else if (url.match(/\.(mp4|webm|ogg)$/i)) {
       setVideoType("file");
+      setLoading(false);
     } else {
       setVideoType("");
+      setError("Invalid video URL. Please enter a valid URL.");
+      setLoading(false);
     }
   };
 
@@ -50,115 +46,182 @@ const VideoWatchTracker = () => {
     return match ? match[1] : null;
   };
 
-  const handleFileVideoTimeUpdate = () => {
-    if (fileVideoRef.current) {
-      setWatchTime(fileVideoRef.current.currentTime);
-      setTotalDuration(fileVideoRef.current.duration);
+  const handleVideoTimeUpdate = () => {
+    if (videoRef.current) {
+      setWatchTime(videoRef.current.currentTime);
     }
   };
 
-  const handleYouTubeReady = (event) => {
-    setTotalDuration(event.target.getDuration());
+  const initializeYouTubePlayer = () => {
+    const videoId = videoUrl.split("v=")[1]?.split("&")[0];
+    youtubePlayer.current = new window.YT.Player("youtube-player", {
+      videoId,
+      events: {
+        onStateChange: (event) => {
+          if (event.data === window.YT.PlayerState.PLAYING) {
+            startYouTubeWatchTimer();
+          } else {
+            stopYouTubeWatchTimer();
+          }
+        },
+        onReady: () => {
+          setTotalDuration(Math.floor(youtubePlayer.current.getDuration()));
+        },
+      },
+    });
   };
 
-  const handleYouTubeStateChange = (event) => {
-    if (event.data === 1) {
-      // Playing
-      const interval = setInterval(() => {
-        setWatchTime(event.target.getCurrentTime());
+  const startYouTubeWatchTimer = () => {
+    if (!youtubePlayer.current.timer) {
+      youtubePlayer.current.timer = setInterval(() => {
+        const currentTime = youtubePlayer.current.getCurrentTime();
+        setWatchTime(Math.floor(currentTime));
       }, 1000);
-
-      return () => clearInterval(interval);
     }
   };
 
-  const progress = totalDuration > 0 ? (watchTime / totalDuration) * 100 : 0;
+  const stopYouTubeWatchTimer = () => {
+    if (youtubePlayer.current?.timer) {
+      clearInterval(youtubePlayer.current.timer);
+      youtubePlayer.current.timer = null;
+    }
+  };
+
+  const initializeVimeoPlayer = () => {
+    const videoId = extractVimeoId(videoUrl);
+    const iframe = document.getElementById("vimeo-player");
+
+    vimeoPlayer.current = new window.Vimeo.Player(iframe);
+    vimeoPlayer.current.on("loaded", () => {
+      vimeoPlayer.current.getDuration().then((duration) => {
+        setTotalDuration(Math.floor(duration));
+      });
+    });
+
+    vimeoPlayer.current.on("play", () => {
+      startVimeoWatchTimer();
+    });
+
+    vimeoPlayer.current.on("pause", () => {
+      stopVimeoWatchTimer();
+    });
+  };
+
+  const startVimeoWatchTimer = () => {
+    if (!vimeoPlayer.current.timer) {
+      vimeoPlayer.current.timer = setInterval(() => {
+        vimeoPlayer.current.getCurrentTime().then((currentTime) => {
+          setWatchTime(Math.floor(currentTime));
+        });
+      }, 1000);
+    }
+  };
+
+  const stopVimeoWatchTimer = () => {
+    if (vimeoPlayer.current?.timer) {
+      clearInterval(vimeoPlayer.current.timer);
+      vimeoPlayer.current.timer = null;
+    }
+  };
+
+  useEffect(() => {
+    if (videoType === "youtube" && window.YT && !youtubePlayer.current) {
+      initializeYouTubePlayer();
+    }
+
+    if (videoType === "vimeo" && !vimeoPlayer.current) {
+      initializeVimeoPlayer();
+    }
+
+    return () => {
+      stopYouTubeWatchTimer();
+      stopVimeoWatchTimer();
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
+    if (!window.YT) {
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+
+    if (!window.Vimeo) {
+      const script = document.createElement("script");
+      script.src = "https://player.vimeo.com/api/player.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, []);
 
   return (
-    <div className="min-h-screen bg-gray-100 text-gray-800 flex flex-col items-center">
-      {/* Header */}
-      <header className="bg-blue-600 text-white w-full py-4 text-center shadow-md">
-        <h1 className="text-3xl font-bold">Video Watch Tracker</h1>
-        <p className="text-sm">Track your video watch time effortlessly!</p>
-      </header>
-
-      {/* Input and Video Container */}
-      <div className="max-w-4xl w-full px-4 py-6">
-        {/* Video URL Input */}
-        <div className="flex items-center gap-4 mb-6">
-          <input
-            type="text"
-            value={videoUrl}
-            onChange={handleUrlChange}
-            placeholder="Enter video URL (YouTube, Vimeo, .mp4, etc.)"
-            className="flex-1 p-3 border border-gray-300 rounded-md shadow-sm focus:ring focus:ring-blue-400 outline-none"
-          />
+    <div className="bg-blue-50 min-h-screen flex justify-center items-center">
+      <div className="w-4/5 mx-auto p-12 bg-white shadow-xl rounded-xl transition-all duration-300 transform hover:scale-105">
+        <div className="bg-blue-600 text-white p-8 rounded-t-xl shadow-md mb-8">
+          <h2 className="text-4xl font-semibold text-center animate-pulse">Video Watch Tracker</h2>
         </div>
 
-        {/* Video Display */}
+        <input
+          type="text"
+          placeholder="Enter video URL (YouTube, Vimeo, MP4, etc.)"
+          onChange={handleUrlChange}
+          className="w-full p-6 border-2 border-gray-300 rounded-lg shadow-md focus:ring-2 focus:ring-blue-500 focus:outline-none mb-8"
+        />
+
+        {loading && (
+          <div className="flex justify-center items-center mb-8">
+            <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-blue-500 border-solid"></div>
+          </div>
+        )}
+
+        {error && <p className="text-center text-red-600 mb-8">{error}</p>}
+
         {videoType === "youtube" && videoUrl && (
-          <div className="mb-6">
-            <h3 className="text-2xl font-semibold mb-2 text-blue-600">YouTube Video</h3>
-            <YouTube
-              videoId={new URLSearchParams(new URL(videoUrl).search).get("v")}
-              onReady={handleYouTubeReady}
-              onStateChange={handleYouTubeStateChange}
-              opts={{ playerVars: { autoplay: 1 } }}
-            />
+          <div>
+            <h3 className="text-2xl font-semibold text-blue-600 mb-6">YouTube Video</h3>
+            <div id="youtube-player" className="w-full h-96 border-2 border-gray-300 rounded-lg shadow-lg mb-6" />
           </div>
         )}
 
         {videoType === "vimeo" && videoUrl && (
-          <div className="mb-6">
-            <h3 className="text-2xl font-semibold mb-2 text-blue-600">Vimeo Video</h3>
-            <div ref={vimeoPlayerRef} className="w-full h-64 bg-gray-200 rounded-md" />
+          <div>
+            <h3 className="text-2xl font-semibold text-blue-600 mb-6">Vimeo Video</h3>
+            <iframe
+              id="vimeo-player"
+              src={`https://player.vimeo.com/video/${extractVimeoId(videoUrl)}`}
+              className="w-full h-96 border-2 border-gray-300 rounded-lg shadow-lg mb-6"
+              frameBorder="0"
+              allow="autoplay; fullscreen"
+              allowFullScreen
+            ></iframe>
           </div>
         )}
 
         {videoType === "file" && videoUrl && (
-          <div className="mb-6">
-            <h3 className="text-2xl font-semibold mb-2 text-blue-600">File Video</h3>
+          <div>
+            <h3 className="text-2xl font-semibold text-blue-600 mb-6">Direct Video</h3>
             <video
-              ref={fileVideoRef}
+              ref={videoRef}
               src={videoUrl}
               controls
-              onTimeUpdate={handleFileVideoTimeUpdate}
-              className="w-full bg-black rounded-md"
+              onTimeUpdate={handleVideoTimeUpdate}
+              className="w-full h-96 border-2 border-gray-300 rounded-lg shadow-lg bg-black mb-6"
             />
           </div>
         )}
 
-        {!videoUrl && (
-          <p className="text-center text-gray-500 mt-4">
-            Please enter a valid video URL (YouTube, Vimeo, .mp4, etc.).
-          </p>
+        {!videoUrl && !loading && (
+          <p className="text-center text-gray-500 mt-6">Enter a valid video URL to begin playback.</p>
         )}
-      </div>
 
-      {/* Watch Time and Progress Bar */}
-      <div className="w-full max-w-4xl px-4">
-        <div className="bg-white p-4 rounded-md shadow-md text-center">
-          <p className="text-red-600 text-xl font-semibold">
-            Watch Time: {formatTime(watchTime)}
-          </p>
-          <p className="text-green-600 text-xl font-semibold">
-            Total Duration: {formatTime(totalDuration)}
-          </p>
-          <div className="w-full bg-gray-300 rounded-full mt-4 overflow-hidden">
-            <div
-              style={{ width: `${progress}%` }}
-              className="bg-blue-600 h-4 rounded-full transition-all duration-300"
-            />
-          </div>
+        <div className="flex justify-center items-center gap-8 mt-8">
+          <p className="text-xl font-medium text-red-600">Watch Time: {formatTime(watchTime)}</p>
+          <p className="text-xl font-medium text-green-600">Total Duration: {formatTime(totalDuration)}</p>
         </div>
       </div>
-
-      {/* Footer */}
-      <footer className="bg-gray-800 text-white w-full py-4 mt-auto text-center">
-        <p>&copy; {new Date().getFullYear()} Video Watch Tracker. All rights reserved.</p>
-      </footer>
     </div>
   );
 };
 
-export default VideoWatchTracker;
+export default VideoPlayer;
